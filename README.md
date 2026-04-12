@@ -29,6 +29,15 @@
 * Set your **Hugging Face API Key** (obtained from: <https://huggingface.co/settings/tokens>)
 * Choose a suitable **Model** (available at: <https://huggingface.co/models?pipeline_tag=text-generation&sort=likes>)
 
-### Step 3: Changes
+
+### Step 3: Using
+
+For start open command menu inside Obsidian and print **AI Assist** 
+
+* Use one of two mode
+- chat version 
+- quick change 
+
+### Step 4: Changes
 
 * Modify the plugin code as needed, no rule!!!
