@@ -34,7 +34,8 @@
 
 For start open command menu inside Obsidian and print **AI Assist** 
 
-* Use one of two mode
+Use one of two mode:
+
 - chat version 
 - quick change 
 
