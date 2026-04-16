@@ -450,11 +450,15 @@ class AIChatView extends ItemView {
 
     // Добавляет сообщение в интерфейс чата
   addMessageToUI(role, text) {
-    // Обёртка сообщения: position: relative важен для позиционирования кнопки
+    // Обёртка сообщения
     const msgWrapper = this.chatEl.createDiv();
-    msgWrapper.style.cssText = 'margin: 6px 0; display: flex; gap: 8px; align-items: flex-start; position: relative;';
+    msgWrapper.style.cssText = 'margin: 6px 0; display: flex; flex-direction: column; gap: 4px;';
 
-    const msgEl = msgWrapper.createDiv();
+    // Отдельная строка для "пузыря" сообщения (нужно для выравнивания влево/вправо)
+    const bubbleRow = msgWrapper.createDiv();
+    bubbleRow.style.cssText = 'display: flex; gap: 8px; align-items: flex-start;';
+
+    const msgEl = bubbleRow.createDiv();
     msgEl.style.cssText = `
       padding: 10px 14px;
       border-radius: 12px;
@@ -476,17 +480,16 @@ class AIChatView extends ItemView {
       msgEl.style.borderBottomLeftRadius = '4px';
       
       // Кнопка копирования для сообщений от AI
-      msgWrapper.style.paddingTop = '24px'; // резервируем место под кнопку, чтобы не перекрывать текст
-      const copyBtn = msgWrapper.createEl('button');
+      const actionsRow = msgWrapper.createDiv();
+      actionsRow.style.cssText = 'display: flex; justify-content: flex-end; opacity: 0; transition: opacity 0.2s;';
+
+      const copyBtn = actionsRow.createEl('button');
       copyBtn.type = 'button';
       copyBtn.textContent = 'Копировать';
       copyBtn.ariaLabel = 'Копировать';
       copyBtn.title = 'Копировать в буфер обмена';
       
       copyBtn.style.cssText = `
-        position: absolute;
-        top: 4px;
-        right: 4px;
         height: 22px;
         padding: 0 8px;
         background: var(--background-primary);
@@ -497,18 +500,15 @@ class AIChatView extends ItemView {
         display: flex;
         align-items: center;
         justify-content: center;
-        opacity: 0;
-        transition: opacity 0.2s, background 0.2s, color 0.2s, border-color 0.2s;
+        transition: background 0.2s, color 0.2s, border-color 0.2s;
         z-index: 10;
         margin: 0;
         line-height: 1;
       `;
       
-      // Показываем кнопку при наведении на сообщение
-      msgWrapper.onmouseenter = () => copyBtn.style.opacity = '0.8';
-      msgWrapper.onmouseleave = () => copyBtn.style.opacity = '0';
-      copyBtn.onmouseenter = () => copyBtn.style.opacity = '1';
-      copyBtn.onmouseleave = () => copyBtn.style.opacity = '0.8';
+      // Показываем панель действий при наведении на сообщение
+      msgWrapper.onmouseenter = () => { actionsRow.style.opacity = '1'; };
+      msgWrapper.onmouseleave = () => { actionsRow.style.opacity = '0'; };
       
       // Обработчик клика с двумя методами копирования (для надёжности)
       copyBtn.onclick = async (e) => {
