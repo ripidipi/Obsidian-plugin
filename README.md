@@ -1,44 +1,26 @@
-# Obsidian ai plugin
+# Obsidian AI Assistant
 
-* The plugin is written with the active use of llm and this is part of the idea of quickly creating a working utility for yourself.
+Плагин для Obsidian, позволяющий работать с AI-моделями (через Hugging Face API) прямо в редакторе: исправлять текст, делать конспекты, объяснять сложные темы и вести диалог.
 
-### Step 1: Installation
+> **Образовательный проект**: Код написан с подробными комментариями на русском языке, чтобы при желании его было проще дорабатывать и расширять
 
-#### Where to Put the Plugin
+## Быстрый старт
 
-* Move the project to the following directory:
-  ```
-  .../Obsidian Vault/.obsidian/plugins/
-  ```
+### 1. Требования
+- [Obsidian](https://obsidian.md) (Desktop)
+- [Node.js](https://nodejs.org/) версии 18+
+- Ключ API от [Hugging Face](https://huggingface.co/settings/tokens)
 
-#### Building the Plugin
+### 2. Установка и сборка
+Склонируйте репозиторий и установите зависимости:
 
-* Install required Node.js modules:
-  ```bash
-  npm init -y
-  npm install esbuild obsidian
-  ```
-* Build the plugin:
-  ```bash
-  npm run build
-  ```
+```bash
+# Клонирование
+git clone <repository-url>Obsidian-plugin
+cd Obsidian-plugin
 
-### Step 2: Hugging Face Settings
+# Установка зависимостей
+npm install
 
-* Go to Obsidian plugin settings
-* Set your **Hugging Face API Key** (obtained from: <https://huggingface.co/settings/tokens>)
-* Choose a suitable **Model** (available at: <https://huggingface.co/models?pipeline_tag=text-generation&sort=likes>)
-
-
-### Step 3: Using
-
-For start open command menu inside Obsidian and print **AI Assist** 
-
-Use one of two mode:
-
-- chat version 
-- quick change 
-
-### Step 4: Changes
-
-* Modify the plugin code as needed, no rule!!!
+# Сборка плагина 
+npm run dev

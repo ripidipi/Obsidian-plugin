@@ -1,17 +1,23 @@
 {
-  "name": "ai-assist",
+  "name": "obsidian-ai-assistant",
   "version": "1.0.0",
+  "description": "Плагин Obsidian для работы с AI: чат, быстрые действия, контекст из заметки",
   "main": "main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "node build.js"
+    "build": "node build/esbuild.config.js",
+    "dev": "node build/esbuild.config.js --dev",
+    "test": "jest"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
+  "devDependencies": {
     "esbuild": "^0.28.0",
-    "obsidian": "^1.12.3"
+    "jest": "^29.0.0",
+    "obsidian": "latest"
   },
-  "description": ""
+  "keywords": [
+    "obsidian",
+    "ai",
+    "plugin",
+    "education"
+  ],
+  "license": "MIT"
 }

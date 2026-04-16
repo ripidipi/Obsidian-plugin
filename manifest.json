@@ -1,9 +1,9 @@
 {
   "id": "ai-assist",
   "name": "AI Assist",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "minAppVersion": "1.0.0",
-  "description": "AI tools for notes (OpenRouter)",
+  "description": "AI tools for notes",
   "author": "Ripidipi",
-  "main": "main.js"
+  "isDesktopOnly": false
 }

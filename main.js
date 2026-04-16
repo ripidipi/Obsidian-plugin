@@ -1,590 +1,117 @@
-// src.js
-var {
-  Plugin,
-  Notice,
-  MarkdownView,
-  PluginSettingTab,
-  Setting,
-  ItemView,
-  WorkspaceLeaf,
-  TFile,
-  Modal,
-  ButtonComponent
-} = require("obsidian");
-var VIEW_TYPE_AI = "ai-chat-view";
-var API_URL = "https://router.huggingface.co/v1/chat/completions";
-var DEFAULT_SETTINGS = {
-  apiKey: "",
-  model: "mistralai/Mistral-7B-Instruct-v0.3",
-  maxTokens: 1500,
-  contextLimit: 4e3,
-  temperature: 0.7
-};
-var QUICK_MODES = {
-  FIX: { id: "fix", label: "\u{1F527} \u0418\u0441\u043F\u0440\u0430\u0432\u0438\u0442\u044C", prompt: "\u0418\u0441\u043F\u0440\u0430\u0432\u044C \u043E\u0440\u0444\u043E\u0433\u0440\u0430\u0444\u0438\u044E \u0438 \u043F\u0443\u043D\u043A\u0442\u0443\u0430\u0446\u0438\u044E, \u041D\u0415 \u043C\u0435\u043D\u044F\u044F \u0441\u043C\u044B\u0441\u043B" },
-  REPHRASE: { id: "rephrase", label: "\u2728 \u0423\u043B\u0443\u0447\u0448\u0438\u0442\u044C", prompt: "\u041F\u0435\u0440\u0435\u043F\u0438\u0448\u0438 \u0442\u0435\u043A\u0441\u0442, \u0441\u0434\u0435\u043B\u0430\u0439 \u0435\u0433\u043E \u044F\u0441\u043D\u0435\u0435 \u0438 \u0447\u0438\u0442\u0430\u0431\u0435\u043B\u044C\u043D\u0435\u0435" },
-  SUMMARY: { id: "summary", label: "\u{1F4DD} \u041A\u043E\u043D\u0441\u043F\u0435\u043A\u0442", prompt: "\u0421\u0434\u0435\u043B\u0430\u0439 \u043A\u043E\u043D\u0441\u043F\u0435\u043A\u0442: \u043A\u0440\u0430\u0442\u043A\u043E, \u043E\u0441\u043D\u043E\u0432\u043D\u044B\u0435 \u0438\u0434\u0435\u0438" },
-  EXPLAIN: { id: "explain", label: "\u{1F4A1} \u041E\u0431\u044A\u044F\u0441\u043D\u0438\u0442\u044C", prompt: "\u041E\u0431\u044A\u044F\u0441\u043D\u0438 \u043F\u0440\u043E\u0441\u0442\u044B\u043C\u0438 \u0441\u043B\u043E\u0432\u0430\u043C\u0438" },
-  REVIEW: { id: "review", label: "\u{1F4CA} \u041E\u0446\u0435\u043D\u0438\u0442\u044C", prompt: "\u041E\u0446\u0435\u043D\u0438 \u0442\u0435\u043A\u0441\u0442 \u043F\u043E: \u044F\u0441\u043D\u043E\u0441\u0442\u044C, \u043B\u043E\u0433\u0438\u043A\u0430, \u0441\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430, \u0433\u0440\u0430\u043C\u043E\u0442\u043D\u043E\u0441\u0442\u044C. \u0414\u0430\u0439 \u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0438\u0438" },
-  SMART: { id: "smart", label: "\u{1F9E0} \u0423\u043C\u043D\u044B\u0439", prompt: "\u041F\u0440\u043E\u0430\u043D\u0430\u043B\u0438\u0437\u0438\u0440\u0443\u0439 \u0442\u0435\u043A\u0441\u0442 \u0438 \u0443\u043B\u0443\u0447\u0448\u0438 \u0435\u0433\u043E" }
-};
-var SYSTEM_PROMPT = `\u0422\u044B AI \u043F\u043E\u043C\u043E\u0449\u043D\u0438\u043A \u0432 \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0435 Obsidian.
-\u041E\u0442\u0432\u0435\u0447\u0430\u0439 \u043A\u0440\u0430\u0442\u043A\u043E, \u043F\u043E \u0434\u0435\u043B\u0443, \u043D\u0430 \u0440\u0443\u0441\u0441\u043A\u043E\u043C \u044F\u0437\u044B\u043A\u0435.
-\u0415\u0441\u043B\u0438 \u043F\u0440\u0435\u0434\u043E\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442 \u2014 \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439 \u0435\u0433\u043E \u0434\u043B\u044F \u043E\u0442\u0432\u0435\u0442\u0430.`;
-module.exports = class AIAssistantPlugin extends Plugin {
-  async onload() {
-    await this.loadSettings();
-    this.registerView(
-      VIEW_TYPE_AI,
-      (leaf) => new AIChatView(leaf, this)
-    );
-    this.addCommand({
-      id: "open-ai-chat",
-      name: "AI: Open Chat",
-      callback: () => this.activateView()
-    });
-    this.addCommand({
-      id: "ai-quick-menu",
-      name: "AI: Quick Menu",
-      editorCallback: (editor, view) => this.openQuickMenu(editor, view)
-    });
-    this.addSettingTab(new AIAssistantSettingTab(this.app, this));
-    new Notice("AI Chat loaded \u{1F680}");
-  }
-  onunload() {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI);
-  }
-  async activateView() {
-    const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE_AI)[0];
-    if (!leaf) {
-      leaf = workspace.getRightLeaf(false);
-      await leaf.setViewState({
-        type: VIEW_TYPE_AI,
-        active: true
-      });
-    }
-    workspace.revealLeaf(leaf);
-  }
-  openQuickMenu(editor, view) {
-    const text = editor.getSelection() || editor.getValue();
-    new QuickModeModal(this.app, this, text, editor).open();
-  }
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
-  getActiveEditor() {
-    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (activeView?.editor) {
-      return activeView.editor;
-    }
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof MarkdownView && leaf.view.editor) {
-        return leaf.view.editor;
-      }
-    }
-    return null;
-  }
-};
-var AIChatView = class extends ItemView {
-  constructor(leaf, plugin) {
-    super(leaf);
-    this.plugin = plugin;
-    this.chatHistory = [];
-    this.useContext = true;
-    this.isLoading = false;
-  }
-  getViewType() {
-    return VIEW_TYPE_AI;
-  }
-  getDisplayText() {
-    return "AI Chat";
-  }
-  async onOpen() {
-    const container = this.containerEl.children[1];
-    container.empty();
-    container.style.display = "flex";
-    container.style.flexDirection = "column";
-    container.style.height = "100%";
-    this.setupChatArea(container);
-    this.setupQuickModes(container);
-    this.setupControls(container);
-    this.setupInputArea(container);
-  }
-  setupChatArea(container) {
-    this.chatEl = container.createDiv();
-    this.chatEl.style.flex = "1";
-    this.chatEl.style.overflowY = "auto";
-    this.chatEl.style.padding = "10px";
-  }
-  setupQuickModes(container) {
-    const modesContainer = container.createDiv();
-    modesContainer.style.padding = "8px 10px";
-    modesContainer.style.borderBottom = "1px solid var(--background-modifier-border)";
-    modesContainer.style.display = "flex";
-    modesContainer.style.flexWrap = "wrap";
-    modesContainer.style.gap = "6px";
-    Object.values(QUICK_MODES).forEach((mode) => {
-      const btn = modesContainer.createEl("button", {
-        text: mode.label,
-        cls: "ai-quick-btn"
-      });
-      btn.style.padding = "4px 10px";
-      btn.style.borderRadius = "6px";
-      btn.style.border = "1px solid var(--background-modifier-border)";
-      btn.style.background = "var(--background-secondary)";
-      btn.style.cursor = "pointer";
-      btn.style.fontSize = "12px";
-      btn.onclick = () => this.quickActionFromChat(mode.id);
-    });
-  }
-  setupControls(container) {
-    const controls = container.createDiv();
-    controls.style.padding = "5px 10px";
-    controls.style.borderBottom = "1px solid var(--background-modifier-border)";
-    controls.style.display = "flex";
-    controls.style.justifyContent = "space-between";
-    controls.style.alignItems = "center";
-    const toggleBtn = controls.createEl("button", {
-      text: `\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${this.useContext ? "ON" : "OFF"}`
-    });
-    toggleBtn.onclick = () => {
-      this.useContext = !this.useContext;
-      toggleBtn.textContent = `\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${this.useContext ? "ON" : "OFF"}`;
-      new Notice(`\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${this.useContext ? "\u0432\u043A\u043B\u044E\u0447\u0435\u043D" : "\u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D"}`);
-    };
-  }
-  setupInputArea(container) {
-    const inputWrapper = container.createDiv();
-    inputWrapper.style.display = "flex";
-    inputWrapper.style.padding = "10px";
-    inputWrapper.style.borderTop = "1px solid var(--background-modifier-border)";
-    inputWrapper.style.gap = "8px";
-    this.input = inputWrapper.createEl("textarea");
-    this.input.style.flex = "1";
-    this.input.style.resize = "none";
-    this.input.style.minHeight = "60px";
-    this.input.placeholder = "\u041D\u0430\u043F\u0438\u0448\u0438 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0438\u043B\u0438 /fix /summary /explain";
-    const sendBtn = inputWrapper.createEl("button", { text: "\u27A4" });
-    sendBtn.onclick = () => this.handleSend();
-    this.input.addEventListener("keydown", async (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        await this.handleSend();
-      }
-    });
-  }
-  async quickActionFromChat(modeId) {
-    const context = await this.extractContext();
-    if (!context) {
-      new Notice("\u26A0\uFE0F \u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u0442\u0435\u043A\u0441\u0442 \u0438\u043B\u0438 \u043E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0444\u0430\u0439\u043B");
-      return;
-    }
-    const editor = this.plugin.getActiveEditor();
-    if (!editor) {
-      new Notice("\u26A0\uFE0F \u041D\u0435\u0442 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0430");
-      return;
-    }
-    await this.quickProcess(modeId, context, editor);
-  }
-  async quickProcess(modeId, text, editor) {
-    const mode = Object.values(QUICK_MODES).find((m) => m.id === modeId);
-    if (!mode) return;
-    this.addMessageToUI("user", `${mode.label}
+var h=(r,t)=>()=>(t||r((t={exports:{}}).exports,t),t.exports);var w=h((Ot,q)=>{q.exports={VIEW_TYPE_AI:"ai-chat-view",API_URL:"https://router.huggingface.co/v1/chat/completions",COMMANDS:{OPEN_CHAT:"open-ai-chat",QUICK_MENU:"ai-quick-menu"},STORAGE_KEY:"ai-assistant-data"}});var C=h((Nt,O)=>{O.exports={apiKey:"",model:"mistralai/Mistral-7B-Instruct-v0.3",maxTokens:1e4,contextLimit:4e3,temperature:.6,maxHistoryLength:20,customPrompts:[],chatHistory:[]}});var R=h(($t,N)=>{var{PluginSettingTab:ot,Setting:g,ButtonComponent:Rt}=require("obsidian"),{DEFAULT_SETTINGS:Vt}=C(),I=class extends ot{constructor(t,e){super(t,e),this.plugin=e}display(){let{containerEl:t}=this;t.empty(),t.createEl("h2",{text:"\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 AI Assistant"}),new g(t).setName("API Key").setDesc("\u041A\u043B\u044E\u0447 \u043E\u0442 Hugging Face (hf_...)").addText(s=>s.setPlaceholder("hf_...").setValue(this.plugin.settings.apiKey).onChange(async i=>{this.plugin.settings.apiKey=i,await this.plugin.saveSettings()})),new g(t).setName("\u041C\u043E\u0434\u0435\u043B\u044C").setDesc("\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440: mistralai/Mistral-7B-Instruct-v0.3").addText(s=>s.setValue(this.plugin.settings.model).onChange(async i=>{this.plugin.settings.model=i,await this.plugin.saveSettings()})),new g(t).setName("\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0432 \u043E\u0442\u0432\u0435\u0442\u0435").setDesc("\u0414\u043B\u0438\u043D\u0430 \u043E\u0442\u0432\u0435\u0442\u0430 \u043C\u043E\u0434\u0435\u043B\u0438").addSlider(s=>s.setLimits(256,4096,256).setValue(this.plugin.settings.maxTokens).setDynamicTooltip().onChange(async i=>{this.plugin.settings.maxTokens=i,await this.plugin.saveSettings()})),new g(t).setName("\u0422\u0435\u043C\u043F\u0435\u0440\u0430\u0442\u0443\u0440\u0430").setDesc("0.0 = \u0442\u043E\u0447\u043D\u043E, 1.0 = \u043A\u0440\u0435\u0430\u0442\u0438\u0432\u043D\u043E").addSlider(s=>s.setLimits(0,1,.1).setValue(this.plugin.settings.temperature).setDynamicTooltip().onChange(async i=>{this.plugin.settings.temperature=i,await this.plugin.saveSettings()})),new g(t).setName("\u041B\u0438\u043C\u0438\u0442 \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442\u0430 (\u0441\u0438\u043C\u0432\u043E\u043B\u044B)").setDesc("\u041C\u0430\u043A\u0441. \u0441\u0438\u043C\u0432\u043E\u043B\u043E\u0432 \u0438\u0437 \u0437\u0430\u043C\u0435\u0442\u043A\u0438").addSlider(s=>s.setLimits(1e3,8e3,500).setValue(this.plugin.settings.contextLimit).setDynamicTooltip().onChange(async i=>{this.plugin.settings.contextLimit=i,await this.plugin.saveSettings()})),new g(t).setName("\u0420\u0430\u0437\u043C\u0435\u0440 \u0438\u0441\u0442\u043E\u0440\u0438\u0438 \u0447\u0430\u0442\u0430").setDesc("\u0421\u043A\u043E\u043B\u044C\u043A\u043E \u043F\u0430\u0440 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0445\u0440\u0430\u043D\u0438\u0442\u044C (0 = \u0431\u0435\u0437 \u0438\u0441\u0442\u043E\u0440\u0438\u0438)").addSlider(s=>s.setLimits(0,50,5).setValue(this.plugin.settings.maxHistoryLength||20).setDynamicTooltip().onChange(async i=>{this.plugin.settings.maxHistoryLength=i,await this.plugin.saveSettings(),i>0&&this.plugin.chatHistory?.length>i&&(this.plugin.chatHistory=this.plugin.chatHistory.slice(-i))})),t.createEl("h3",{text:"\u041F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C\u0441\u043A\u0438\u0435 \u0440\u0435\u0436\u0438\u043C\u044B"});let e=t.createDiv();e.style.marginBottom="20px",(this.plugin.settings.customPrompts||[]).forEach((s,i)=>{this.createPromptEditor(e,s,i)}),new g(e).addButton(s=>s.setButtonText("+ \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0440\u0435\u0436\u0438\u043C").setCta().onClick(async()=>{this.plugin.settings.customPrompts=this.plugin.settings.customPrompts||[],this.plugin.settings.customPrompts.push({id:`custom_${Date.now()}`,label:"\u041D\u043E\u0432\u044B\u0439 \u0440\u0435\u0436\u0438\u043C",instruction:"\u041E\u043F\u0438\u0448\u0438 \u0437\u0430\u0434\u0430\u0447\u0443 \u0434\u043B\u044F AI..."}),await this.plugin.saveSettings(),this.display()})),new g(t).setName("\u0427\u0442\u043E \u0434\u0435\u043B\u0430\u0442\u044C \u0441 \u043E\u0442\u0432\u0435\u0442\u043E\u043C?").setDesc("\u041A\u0430\u043A \u043E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043F\u043E\u0441\u043B\u0435 \u0433\u0435\u043D\u0435\u0440\u0430\u0446\u0438\u0438").addDropdown(s=>s.addOption("modal","\u0421\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0442\u044C \u043A\u0430\u0436\u0434\u044B\u0439 \u0440\u0430\u0437").addOption("append","\u0421\u0440\u0430\u0437\u0443 \u0432 \u043A\u043E\u043D\u0435\u0446 \u0444\u0430\u0439\u043B\u0430").addOption("chat","\u0422\u043E\u043B\u044C\u043A\u043E \u0432 \u0447\u0430\u0442\u0435").setValue(this.plugin.settings.insertBehavior||"modal").onChange(async i=>{this.plugin.settings.insertBehavior=i,await this.plugin.saveSettings()}))}createPromptEditor(t,e,n){let s=t.createDiv();s.style.cssText="border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: var(--background-secondary);";let i=s.createDiv();i.style.cssText="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;",i.createEl("strong",{text:`\u0420\u0435\u0436\u0438\u043C #${n+1}`});let o=i.createEl("button",{text:"\u0423\u0434\u0430\u043B\u0438\u0442\u044C"});o.style.cssText="background: var(--background-modifier-error); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;",o.onclick=async()=>{this.plugin.settings.customPrompts.splice(n,1),await this.plugin.saveSettings(),this.display()},new g(s).setName("\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043A\u043D\u043E\u043F\u043A\u0438").addText(a=>a.setValue(e.label).onChange(async c=>{e.label=c,await this.plugin.saveSettings()})),new g(s).setName("\u0418\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0438\u044F \u0434\u043B\u044F AI").setDesc("\u0427\u0442\u043E \u0434\u043E\u043B\u0436\u043D\u0430 \u0441\u0434\u0435\u043B\u0430\u0442\u044C \u043C\u043E\u0434\u0435\u043B\u044C").addTextArea(a=>a.setValue(e.instruction).setPlaceholder("\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440: \u041F\u0435\u0440\u0435\u0432\u0435\u0434\u0438 \u0442\u0435\u043A\u0441\u0442 \u043D\u0430 \u0430\u043D\u0433\u043B\u0438\u0439\u0441\u043A\u0438\u0439...").onChange(async c=>{e.instruction=c,await this.plugin.saveSettings()}))}};N.exports={AIAssistantSettingTab:I}});var E=h((Wt,V)=>{async function at({apiUrl:r,apiKey:t,payload:e}){let n=await fetch(r,{method:"POST",headers:{Authorization:`Bearer ${t}`,"Content-Type":"application/json"},body:JSON.stringify(e)});if(!n.ok){let i=await n.json().catch(()=>({}));throw new Error(i.error?.message||`HTTP \u043E\u0448\u0438\u0431\u043A\u0430 ${n.status}`)}return(await n.json()).choices?.[0]?.message?.content?.trim()}V.exports={sendToAI:at}});var T=h((zt,W)=>{var $={FIX:{id:"fix",label:"\u0418\u0441\u043F\u0440\u0430\u0432\u0438\u0442\u044C",instruction:"\u0418\u0441\u043F\u0440\u0430\u0432\u044C \u043E\u0440\u0444\u043E\u0433\u0440\u0430\u0444\u0438\u044E, \u043F\u0443\u043D\u043A\u0442\u0443\u0430\u0446\u0438\u044E \u0438 \u0433\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u043A\u0443. \u041D\u0415 \u043C\u0435\u043D\u044F\u0439 \u0441\u043C\u044B\u0441\u043B \u0438 \u0441\u0442\u0438\u043B\u044C \u0430\u0432\u0442\u043E\u0440\u0430"},REPHRASE:{id:"rephrase",label:"\u0423\u043B\u0443\u0447\u0448\u0438\u0442\u044C",instruction:"\u041F\u0435\u0440\u0435\u043F\u0438\u0448\u0438 \u0442\u0435\u043A\u0441\u0442: \u0441\u0434\u0435\u043B\u0430\u0439 \u0435\u0433\u043E \u044F\u0441\u043D\u0435\u0435, \u043B\u043E\u0433\u0438\u0447\u043D\u0435\u0435 \u0438 \u0447\u0438\u0442\u0430\u0431\u0435\u043B\u044C\u043D\u0435\u0435. \u0421\u043E\u0445\u0440\u0430\u043D\u0438 \u043A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u0438\u0434\u0435\u0438"},SUMMARY:{id:"summary",label:"\u041A\u043E\u043D\u0441\u043F\u0435\u043A\u0442",instruction:"\u0421\u0434\u0435\u043B\u0430\u0439 \u043A\u0440\u0430\u0442\u043A\u0438\u0439 \u043A\u043E\u043D\u0441\u043F\u0435\u043A\u0442: \u0432\u044B\u0434\u0435\u043B\u0438 \u043E\u0441\u043D\u043E\u0432\u043D\u044B\u0435 \u0442\u0435\u0437\u0438\u0441\u044B, \u0443\u0431\u0435\u0440\u0438 \u0432\u043E\u0434\u0443. \u0424\u043E\u0440\u043C\u0430\u0442: \u043C\u0430\u0440\u043A\u0438\u0440\u043E\u0432\u0430\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A"},EXPLAIN:{id:"explain",label:"\u041E\u0431\u044A\u044F\u0441\u043D\u0438\u0442\u044C",instruction:"\u041E\u0431\u044A\u044F\u0441\u043D\u0438 \u0441\u0443\u0442\u044C \u0442\u0435\u043A\u0441\u0442\u0430 \u043F\u0440\u043E\u0441\u0442\u044B\u043C\u0438 \u0441\u043B\u043E\u0432\u0430\u043C\u0438, \u043A\u0430\u043A \u0435\u0441\u043B\u0438 \u0431\u044B \u0440\u0430\u0441\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u043B \u043D\u043E\u0432\u0438\u0447\u043A\u0443. \u0418\u0437\u0431\u0435\u0433\u0430\u0439 \u0436\u0430\u0440\u0433\u043E\u043D\u0430"},REVIEW:{id:"review",label:"\u041E\u0446\u0435\u043D\u0438\u0442\u044C",instruction:"\u041E\u0446\u0435\u043D\u0438 \u0442\u0435\u043A\u0441\u0442 \u043F\u043E \u043A\u0440\u0438\u0442\u0435\u0440\u0438\u044F\u043C: \u044F\u0441\u043D\u043E\u0441\u0442\u044C, \u043B\u043E\u0433\u0438\u043A\u0430, \u0441\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430, \u0433\u0440\u0430\u043C\u043E\u0442\u043D\u043E\u0441\u0442\u044C. \u0414\u0430\u0439 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u044B\u0435 \u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u0430\u0446\u0438\u0438 \u043F\u043E \u0443\u043B\u0443\u0447\u0448\u0435\u043D\u0438\u044E"},SMART:{id:"smart",label:"\u0423\u043C\u043D\u044B\u0439",instruction:"\u041F\u0440\u043E\u0430\u043D\u0430\u043B\u0438\u0437\u0438\u0440\u0443\u0439 \u0442\u0435\u043A\u0441\u0442 \u0438 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438 \u0443\u043B\u0443\u0447\u0448\u0435\u043D\u0438\u044F: \u0447\u0442\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C, \u0447\u0442\u043E \u0443\u0431\u0440\u0430\u0442\u044C, \u043A\u0430\u043A \u043F\u0435\u0440\u0435\u0441\u0442\u0440\u043E\u0438\u0442\u044C \u0430\u0440\u0433\u0443\u043C\u0435\u043D\u0442\u0430\u0446\u0438\u044E"}},rt=`\u0422\u044B AI-\u043F\u043E\u043C\u043E\u0449\u043D\u0438\u043A \u0432 \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0435 Obsidian.
+\u041E\u0442\u0432\u0435\u0447\u0430\u0439 \u043F\u043E \u0434\u0435\u043B\u0443, \u043D\u0430 \u0440\u0443\u0441\u0441\u043A\u043E\u043C \u044F\u0437\u044B\u043A\u0435.
+\u0415\u0441\u043B\u0438 \u043F\u0440\u0435\u0434\u043E\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442 \u2014 \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u043E \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439 \u0435\u0433\u043E \u0434\u043B\u044F \u043E\u0442\u0432\u0435\u0442\u0430.
+\u041D\u0435 \u0432\u044B\u0434\u0443\u043C\u044B\u0432\u0430\u0439 \u0444\u0430\u043A\u0442\u044B, \u043D\u0435 \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u0439 \u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044E, \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u043D\u0435\u0442 \u0432 \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442\u0435 \u0435\u0441\u043B\u0438 \u043E\u0431 \u044D\u0442\u043E\u043C \u043D\u0435 \u043F\u0440\u043E\u0441\u044F\u0442
+\u0415\u0441\u043B\u0438 \u043F\u0440\u043E\u0441\u044F\u0442 \u0447\u0442\u043E-\u0442\u043E \u0441\u0434\u0435\u043B\u0430\u0442\u044C \u0431\u0435\u0437 \u043E\u0442\u0433\u043E\u0432\u043E\u0440\u043E\u043A \u043F\u0440\u043E\u0441\u0442\u043E \u0434\u0435\u043B\u0430\u0439`;function lt({systemPrompt:r,taskInstruction:t,context:e,history:n=[]}){let s=e?`<context>
+${e}
+</context>`:"<context>\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442 \u043D\u0435 \u043F\u0440\u0435\u0434\u043E\u0441\u0442\u0430\u0432\u043B\u0435\u043D.</context>";return`
+<instructions>
+${r}
+</instructions>
 
-${text.slice(0, 200)}${text.length > 200 ? "..." : ""}`);
-    this.setLoading(true);
-    try {
-      const prompt = `${mode.prompt}:
+<task>
+${t}
+</task>
 
-${text}`;
-      const payload = {
-        model: this.plugin.settings.model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: prompt }
-        ],
-        max_tokens: this.plugin.settings.maxTokens,
-        temperature: this.plugin.settings.temperature
-      };
-      const response = await this.sendToAI(payload);
-      if (response) {
-        this.addMessageToUI("assistant", response);
-        new InsertModeModal(this.app, response, text, editor).open();
-      }
-    } catch (error) {
-      console.error("Quick action failed:", error);
-      new Notice("\u041E\u0448\u0438\u0431\u043A\u0430: " + error.message);
-    } finally {
-      this.setLoading(false);
-    }
-  }
-  setLoading(loading) {
-    this.isLoading = loading;
-    if (loading) {
-      this.input.disabled = true;
-      this.addLoadingIndicator();
-    } else {
-      this.input.disabled = false;
-      this.removeLoadingIndicator();
-    }
-  }
-  addLoadingIndicator() {
-    const loadingEl = this.chatEl.createDiv();
-    loadingEl.className = "ai-loading-indicator";
-    loadingEl.style.padding = "10px 14px";
-    loadingEl.style.background = "var(--background-secondary)";
-    loadingEl.style.borderRadius = "12px";
-    loadingEl.style.margin = "6px 0";
-    loadingEl.style.maxWidth = "85%";
-    loadingEl.style.marginRight = "auto";
-    const dots = loadingEl.createDiv();
-    dots.style.display = "flex";
-    dots.style.gap = "4px";
-    dots.style.justifyContent = "center";
-    for (let i = 0; i < 3; i++) {
-      const dot = dots.createDiv();
-      dot.style.width = "8px";
-      dot.style.height = "8px";
-      dot.style.borderRadius = "50%";
-      dot.style.background = "var(--text-muted)";
-      dot.style.animation = `bounce 1.4s infinite ease-in-out ${i * 0.16}s`;
-      const style = document.createElement("style");
-      style.textContent = `
+${s}
+
+\u041E\u0442\u0432\u0435\u0442:`}function ct(r,t){let e={fix:"\u0418\u0441\u043F\u0440\u0430\u0432\u044C \u0433\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0435, \u0441\u0442\u0438\u043B\u0438\u0441\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u0438 \u043B\u043E\u0433\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u0432 \u0442\u0435\u043A\u0441\u0442\u0435 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>.",summary:"\u0421\u0434\u0435\u043B\u0430\u0439 \u043A\u0440\u0430\u0442\u043A\u043E\u0435 \u0441\u0430\u043C\u043C\u0430\u0440\u0438 \u0442\u0435\u043A\u0441\u0442\u0430 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>. \u0412\u044B\u0434\u0435\u043B\u0438 \u043A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u0442\u0435\u0437\u0438\u0441\u044B, \u043E\u0444\u043E\u0440\u043C\u0438 \u0441\u043F\u0438\u0441\u043A\u043E\u043C.",explain:"\u041E\u0431\u044A\u044F\u0441\u043D\u0438 \u043F\u0440\u043E\u0441\u0442\u044B\u043C\u0438 \u0441\u043B\u043E\u0432\u0430\u043C\u0438 \u0441\u0443\u0442\u044C \u0442\u0435\u043A\u0441\u0442\u0430 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>. \u0418\u0437\u0431\u0435\u0433\u0430\u0439 \u0441\u043B\u043E\u0436\u043D\u044B\u0445 \u0442\u0435\u0440\u043C\u0438\u043D\u043E\u0432.",rewrite:"\u041F\u0435\u0440\u0435\u043F\u0438\u0448\u0438 \u0442\u0435\u043A\u0441\u0442 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>, \u0443\u043B\u0443\u0447\u0448\u0438\u0432 \u0447\u0438\u0442\u0430\u0435\u043C\u043E\u0441\u0442\u044C \u0438 \u0441\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0443. \u0421\u043E\u0445\u0440\u0430\u043D\u0438 \u0441\u043C\u044B\u0441\u043B.",normal:t};return e[r]||e.normal}function dt(r=[]){let t={...$};for(let e of r)if(e?.id&&e?.label&&e?.instruction){let n=e.id.toUpperCase();t[n]={id:e.id,label:e.label,instruction:e.instruction}}return t}W.exports={QUICK_MODES:$,SYSTEM_PROMPT:rt,composePrompt:lt,getTaskInstruction:ct,getAllModes:dt}});var k=h((Ut,U)=>{var{Modal:pt,ButtonComponent:z,Notice:S}=require("obsidian"),A=class extends pt{constructor(t,e,n,s){super(t),this.response=e,this.originalText=n,this.editor=s}onOpen(){let{contentEl:t}=this;t.createEl("h3",{text:"\u041A\u0430\u043A \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442?"});let e=t.createDiv();e.style.cssText=`
+      background: var(--background-primary);
+      border: 1px solid var(--background-modifier-border);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 15px;
+      max-height: 120px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--font-monospace);
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    `;let n=200,s=this.response.length>n?this.response.slice(0,n)+`
+... [\u0435\u0449\u0451 `+(this.response.length-n)+" \u0441\u0438\u043C\u0432\u043E\u043B\u043E\u0432]":this.response;e.setText(s);let i=e.createEl("small");i.style.cssText="display: block; margin-top: 6px; text-align: right; opacity: 0.7;",i.setText("\u041F\u0440\u043E\u043A\u0440\u0443\u0442\u0438 \u0434\u043B\u044F \u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440\u0430 \u043F\u043E\u043B\u043D\u043E\u0433\u043E \u043E\u0442\u0432\u0435\u0442\u0430");let o=t.createEl("p");o.style.cssText="color: var(--text-muted); margin-bottom: 15px; font-size: 13px;",o.setText("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043F\u043E\u0441\u043E\u0431 \u0432\u0441\u0442\u0430\u0432\u043A\u0438 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u043D\u043D\u043E\u0433\u043E \u0442\u0435\u043A\u0441\u0442\u0430 \u0432 \u0437\u0430\u043C\u0435\u0442\u043A\u0443");let a=t.createDiv();a.style.cssText="display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px;",[{id:"replace_selection",label:"\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435",desc:"\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u043D\u0430 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442"},{id:"append",label:"\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0441\u043B\u0435",desc:"\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043F\u043E\u0441\u043B\u0435 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0433\u043E \u0442\u0435\u043A\u0441\u0442\u0430"},{id:"block",label:"\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0431\u043B\u043E\u043A\u043E\u043C",desc:'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0441 \u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043A\u043E\u043C "AI" \u0438 \u0440\u0430\u0437\u0434\u0435\u043B\u0438\u0442\u0435\u043B\u0435\u043C'},{id:"replace_file",label:"\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u0435\u0441\u044C \u0444\u0430\u0439\u043B",desc:"\u041F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0441\u043E\u0434\u0435\u0440\u0436\u0438\u043C\u043E\u0435 \u0437\u0430\u043C\u0435\u0442\u043A\u0438 (\u0441\u0442\u0430\u0440\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u0443\u0434\u0430\u043B\u0438\u0442\u0441\u044F)"}].forEach(({id:l,label:x,desc:p})=>{let u=a.createDiv();u.style.cssText="display: flex; flex-direction: column; gap: 4px;";let d=new z(u);d.setButtonText(x),d.setClass("mod-cta"),l==="replace_file"&&(d.buttonEl.style.borderColor="var(--text-warning)",d.buttonEl.style.color="var(--text-warning)",d.buttonEl.style.fontWeight="500"),d.onClick(()=>{this.insertWithMode(l),this.close()});let f=u.createEl("small");f.style.cssText="color: var(--text-muted); font-size: 11px;",f.setText(p)}),new z(t).setButtonText("\u041E\u0442\u043C\u0435\u043D\u0430").setClass("mod-secondary").onClick(()=>this.close())}insertWithMode(t){if(!this.editor){new S("\u041D\u0435\u0442 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0430");return}switch(t){case"replace_selection":this.editor.replaceSelection(this.response);break;case"append":this.editor.replaceSelection(`
+
+---
+`+this.response);break;case"block":this.editor.replaceSelection(`
+
+---
+### AI
+`+this.response);break;case"replace_file":this.editor.setValue(this.response),new S("\u0421\u043E\u0434\u0435\u0440\u0436\u0438\u043C\u043E\u0435 \u0444\u0430\u0439\u043B\u0430 \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E \u0437\u0430\u043C\u0435\u043D\u0435\u043D\u043E");break}new S("\u0422\u0435\u043A\u0441\u0442 \u0432\u0441\u0442\u0430\u0432\u043B\u0435\u043D")}};U.exports={InsertModeModal:A}});var L=h((Yt,j)=>{var{Notice:M}=require("obsidian"),{sendToAI:ut}=E(),{composePrompt:ht,getTaskInstruction:Kt,getAllModes:Y,SYSTEM_PROMPT:K}=T(),gt=w();async function mt({plugin:r,modeId:t,text:e,editor:n,sourceType:s="selection",insertBehavior:i="modal",onUpdateUI:o}){let a=Y(r.settings.customPrompts),c=Object.values(a).find(l=>l.id===t);if(!c){console.warn(`\u0420\u0435\u0436\u0438\u043C ${t} \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D`);return}if(o){let l=e.slice(0,100)+(e.length>100?"...":"");o("user",`${s==="full-file"?"\u0424\u0430\u0439\u043B":"\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435"} \u2022 ${c.label}
+
+${l}`),o("loading",!0)}try{let l=ht({systemPrompt:K,taskInstruction:c.instruction,context:e}),x={model:r.settings.model,messages:[{role:"system",content:K},{role:"user",content:l}],max_tokens:r.settings.maxTokens,temperature:r.settings.temperature},p=await ut({apiUrl:gt.API_URL,apiKey:r.settings.apiKey,payload:x});if(p){if(o&&o("assistant",p),i==="append"){if(n){let u=n.getSelection().length>0?n.getCursor("to"):n.getCursor();n.setSelection(u,u),n.replaceSelection(`
+
+---
+`+p),new M("\u0422\u0435\u043A\u0441\u0442 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D \u0432 \u043A\u043E\u043D\u0435\u0446 \u0444\u0430\u0439\u043B\u0430")}}else if(i==="chat")new M("\u041E\u0442\u0432\u0435\u0442 \u043F\u043E\u043A\u0430\u0437\u0430\u043D \u0432 \u0447\u0430\u0442\u0435");else if(n){let{InsertModeModal:u}=k();new u(r.app,p,e,n).open()}}}catch(l){console.error("Quick action failed:",l),new M(`\u041E\u0448\u0438\u0431\u043A\u0430: ${l.message}`),o&&o("assistant",`\u041E\u0448\u0438\u0431\u043A\u0430: ${l.message}`)}finally{o&&o("loading",!1)}}j.exports={processQuickAction:mt,getAllModes:Y}});var P=h((jt,F)=>{var{MarkdownView:Q}=require("obsidian");function xt(r){let t=r.workspace.getActiveViewOfType(Q);if(t?.editor)return t.editor;for(let e of r.workspace.getLeavesOfType("markdown"))if(e.view instanceof Q&&e.view.editor)return e.view.editor;return null}function yt({editor:r,useContext:t,contextLimit:e}){if(!t||!r)return null;let n=r.getSelection()?.trim();return n||r.getValue()?.slice(0,e)?.trim()||null}F.exports={getActiveEditor:xt,extractText:yt}});var Z=h((Ft,J)=>{var{ItemView:ft,Notice:m,ButtonComponent:Qt}=require("obsidian"),G=w(),{sendToAI:bt}=E(),{composePrompt:vt,getTaskInstruction:wt,getAllModes:Tt,SYSTEM_PROMPT:X}=T(),{processQuickAction:Et}=L(),{getActiveEditor:D,extractText:kt}=P(),{InsertModeModal:Ct}=k(),_=class extends ft{constructor(t,e){super(t),this.plugin=e,this.chatHistory=[],this.useContext=!0,this.isLoading=!1,this.currentLoadingEl=null,this.insertBehavior=this.plugin.settings.insertBehavior||"modal"}getViewType(){return G.VIEW_TYPE_AI}getDisplayText(){return"AI Chat"}async onOpen(){let t=this.containerEl.children[1];if(t.empty(),t.style.display="flex",t.style.flexDirection="column",t.style.height="100%",this.setupChatArea(t),this.setupQuickModes(t),this.setupControls(t),this.setupInputArea(t),this.plugin.chatHistory&&this.plugin.chatHistory.length>0)for(let e of this.plugin.chatHistory)this.addMessageToUI(e.role,e.content)}setupChatArea(t){this.chatEl=t.createDiv(),this.chatEl.style.flex="1",this.chatEl.style.overflowY="auto",this.chatEl.style.padding="10px",this.chatEl.style.display="flex",this.chatEl.style.flexDirection="column",this.chatEl.style.gap="8px"}setupQuickModes(t){let e=t.createDiv();e.style.padding="8px 10px",e.style.borderBottom="1px solid var(--background-modifier-border)",e.style.display="flex",e.style.flexWrap="wrap",e.style.gap="6px";let n=Tt(this.plugin.settings.customPrompts);Object.values(n).forEach(s=>{let i=e.createEl("button",{text:s.label,cls:"ai-quick-btn"});i.style.padding="4px 10px",i.style.borderRadius="6px",i.style.border="1px solid var(--background-modifier-border)",i.style.background="var(--background-secondary)",i.style.cursor="pointer",i.style.fontSize="12px",i.onclick=()=>this.quickActionFromChat(s.id)})}setupControls(t){let e=t.createDiv();e.style.padding="5px 10px",e.style.borderBottom="1px solid var(--background-modifier-border)",e.style.display="flex",e.style.justifyContent="space-between",e.style.alignItems="center",e.style.flexWrap="wrap",e.style.gap="8px";let n=e.createEl("button",{text:`\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${this.useContext?"\u0432\u043A\u043B\u044E\u0447\u0435\u043D":"\u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D"}`});n.style.fontSize="12px",n.style.padding="4px 8px",n.onclick=()=>{this.useContext=!this.useContext;let a=this.useContext?"\u0432\u043A\u043B\u044E\u0447\u0435\u043D":"\u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D";n.textContent=`\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${a}`,new m(`\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${a}`)};let s=e.createDiv();s.style.display="flex",s.style.alignItems="center",s.style.gap="4px",s.createEl("small",{text:"\u0412\u0441\u0442\u0430\u0432\u043A\u0430:",cls:"ai-control-label"});let i=s.createEl("select");i.style.fontSize="12px",i.style.padding="4px 8px",i.style.borderRadius="4px",i.style.border="1px solid var(--background-modifier-border)",i.style.background="var(--background-secondary)",i.style.color="var(--text-normal)";let o=[{value:"modal",label:"\u0421\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0442\u044C"},{value:"append",label:"\u0412 \u043A\u043E\u043D\u0435\u0446"},{value:"chat",label:"\u0422\u043E\u043B\u044C\u043A\u043E \u0447\u0430\u0442"}];o.forEach(a=>{let c=i.createEl("option",{value:a.value,text:a.label});a.value===this.insertBehavior&&(c.selected=!0)}),i.onchange=a=>{this.insertBehavior=a.target.value,new m(`\u0420\u0435\u0436\u0438\u043C \u0432\u0441\u0442\u0430\u0432\u043A\u0438: ${o.find(c=>c.value===this.insertBehavior)?.label}`)}}setupInputArea(t){let e=t.createDiv();e.style.display="flex",e.style.padding="10px",e.style.borderTop="1px solid var(--background-modifier-border)",e.style.gap="8px",this.input=e.createEl("textarea"),this.input.style.flex="1",this.input.style.resize="none",this.input.style.minHeight="60px",this.input.placeholder="\u041D\u0430\u043F\u0438\u0448\u0438 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0438\u043B\u0438 /fix /summary /explain";let n=e.createEl("button",{text:"\u27A4"});n.onclick=()=>this.handleSend(),this.input.addEventListener("keydown",async s=>{s.key==="Enter"&&!s.shiftKey&&(s.preventDefault(),await this.handleSend())})}async quickActionFromChat(t){let e=D(this.app);if(!e){new m("\u041D\u0435\u0442 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0430");return}let n=e.getSelection(),s="selection";if(!n||n.trim().length===0){n=e.getValue();let o=this.plugin.settings.contextLimit||4e3;n.length>o&&(n=n.slice(0,o),new m(`\u0424\u0430\u0439\u043B \u0431\u043E\u043B\u044C\u0448\u043E\u0439: \u043E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u044E \u043F\u0435\u0440\u0432\u044B\u0435 ${o} \u0441\u0438\u043C\u0432\u043E\u043B\u043E\u0432`)),s="full-file"}if(!n||n.trim().length===0){new m("\u0424\u0430\u0439\u043B \u043F\u0443\u0441\u0442\u043E\u0439: \u043D\u0435\u0447\u0435\u0433\u043E \u043E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u0442\u044C");return}await Et({plugin:this.plugin,modeId:t,text:n,editor:e,sourceType:s,insertBehavior:this.insertBehavior,onUpdateUI:(i,o)=>{if(i==="user"||i==="assistant")if(i==="user"&&!o.startsWith("[")){let a=s==="full-file"?"\u0424\u0430\u0439\u043B":"\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435";this.addMessageToUI(i,`${a}: ${o.slice(0,200)}${o.length>200?"...":""}`)}else this.addMessageToUI(i,o);else i==="loading"&&this.setLoading(o)}})}setLoading(t){this.isLoading=t,t?(this.input.disabled=!0,this.addLoadingIndicator()):(this.input.disabled=!1,this.removeLoadingIndicator())}addLoadingIndicator(){let t=this.chatEl.createDiv();t.className="ai-loading-indicator",t.style.padding="10px 14px",t.style.background="var(--background-secondary)",t.style.borderRadius="12px",t.style.margin="6px 0",t.style.maxWidth="85%",t.style.marginRight="auto";let e=t.createDiv();e.style.display="flex",e.style.gap="4px",e.style.justifyContent="center";for(let s=0;s<3;s++){let i=e.createDiv();i.style.width="8px",i.style.height="8px",i.style.borderRadius="50%",i.style.background="var(--text-muted)",i.style.animation=`bounce 1.4s infinite ease-in-out ${s*.16}s`}let n="ai-loading-style";if(!document.getElementById(n)){let s=document.createElement("style");s.id=n,s.textContent=`
         @keyframes bounce {
           0%, 80%, 100% { transform: scale(0); }
           40% { transform: scale(1); }
         }
-      `;
-      if (!document.querySelector("#ai-loading-style")) {
-        style.id = "ai-loading-style";
-        document.head.appendChild(style);
-      }
-    }
-    loadingEl.appendChild(dots);
-    this.chatEl.scrollTop = this.chatEl.scrollHeight;
-    this.currentLoadingEl = loadingEl;
-  }
-  removeLoadingIndicator() {
-    if (this.currentLoadingEl) {
-      this.currentLoadingEl.remove();
-      this.currentLoadingEl = null;
-    }
-  }
-  async handleSend() {
-    const rawInput = this.input.value.trim();
-    if (!rawInput) return;
-    this.addMessageToUI("user", rawInput);
-    this.input.value = "";
-    this.setLoading(true);
-    try {
-      const context = await this.extractContext();
-      const mode = this.detectMode(rawInput);
-      const cleanInput = rawInput.replace(/^\/\w+\s*/, "").trim();
-      const requestPayload = this.composeRequestPayload(cleanInput, context, mode);
-      const response = await this.sendToAI(requestPayload);
-      if (response) {
-        this.addMessageToUI("assistant", response);
-        this.updateHistory(cleanInput, response);
-      }
-    } catch (error) {
-      console.error("AI Request failed:", error);
-      new Notice("\u041E\u0448\u0438\u0431\u043A\u0430: " + error.message);
-      this.addMessageToUI("assistant", "\u274C \u041E\u0448\u0438\u0431\u043A\u0430: " + error.message);
-    } finally {
-      this.setLoading(false);
-    }
-  }
-  async extractContext() {
-    if (!this.useContext) return null;
-    const editor = this.plugin.getActiveEditor();
-    if (!editor) return null;
-    const selection = editor.getSelection();
-    if (selection && selection.trim().length > 0) {
-      return selection.trim();
-    }
-    const fullText = editor.getValue();
-    if (fullText && fullText.trim().length > 0) {
-      return fullText.slice(0, this.plugin.settings.contextLimit).trim();
-    }
-    return null;
-  }
-  detectMode(text) {
-    if (text.startsWith("/fix")) return "fix";
-    if (text.startsWith("/summary")) return "summary";
-    if (text.startsWith("/explain")) return "explain";
-    if (text.startsWith("/rewrite")) return "rewrite";
-    return "normal";
-  }
-  composeRequestPayload(userInput, context, mode) {
-    const contextBlock = context ? `<context>
-${context}
-</context>` : "<context>\u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442 \u043D\u0435 \u043F\u0440\u0435\u0434\u043E\u0441\u0442\u0430\u0432\u043B\u0435\u043D.</context>";
-    const taskInstructions = this.getTaskInstruction(mode, userInput);
-    const finalPrompt = `
-<instructions>
-${SYSTEM_PROMPT}
-</instructions>
+      `,document.head.appendChild(s)}this.chatEl.scrollTop=this.chatEl.scrollHeight,this.currentLoadingEl=t}removeLoadingIndicator(){this.currentLoadingEl&&(this.currentLoadingEl.remove(),this.currentLoadingEl=null)}async handleSend(){let t=this.input.value.trim();if(t){this.addMessageToUI("user",t),this.input.value="",this.setLoading(!0);try{let e=await kt({editor:D(this.app),useContext:this.useContext,contextLimit:this.plugin.settings.contextLimit}),n=this.detectMode(t),s=t.replace(/^\/\w+\s*/,"").trim(),i=this.composeRequestPayload(s,e,n),o=await bt({apiUrl:G.API_URL,apiKey:this.plugin.settings.apiKey,payload:i});if(o){this.addMessageToUI("assistant",o),this.updateHistory(s,o);let a=D(this.app);if(this.insertBehavior==="append"&&a){let c=a.getSelection().length>0?a.getCursor("to"):a.getCursor();a.setSelection(c,c),a.replaceSelection(`
 
-<task>
-${taskInstructions}
-</task>
+---
+`+o),new m("\u0422\u0435\u043A\u0441\u0442 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D \u0432 \u043A\u043E\u043D\u0435\u0446 \u0444\u0430\u0439\u043B\u0430")}else this.insertBehavior==="modal"&&a?setTimeout(()=>{new Ct(this.app,o,s,a).open()},100):new m('\u041E\u0442\u0432\u0435\u0442 \u0432 \u0447\u0430\u0442\u0435. \u0414\u043B\u044F \u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u044F \u043D\u0430\u0436\u043C\u0438\u0442\u0435 "\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C" \u0443 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F')}}catch(e){console.error("AI Request failed:",e),new m("\u041E\u0448\u0438\u0431\u043A\u0430: "+e.message),this.addMessageToUI("assistant","\u041E\u0448\u0438\u0431\u043A\u0430: "+e.message)}finally{this.setLoading(!1)}}}detectMode(t){return t.startsWith("/fix")?"fix":t.startsWith("/summary")?"summary":t.startsWith("/explain")?"explain":t.startsWith("/rewrite")?"rewrite":"normal"}composeRequestPayload(t,e,n){let s=wt(n,t),i=vt({systemPrompt:X,taskInstruction:s,context:e,history:this.chatHistory});return{model:this.plugin.settings.model,messages:[{role:"system",content:X},...this.chatHistory,{role:"user",content:i}],max_tokens:this.plugin.settings.maxTokens,temperature:this.plugin.settings.temperature}}updateHistory(t,e){this.chatHistory.push({role:"user",content:t},{role:"assistant",content:e});let n=this.plugin.settings.maxHistoryLength||20;n>0&&this.chatHistory.length>n&&(this.chatHistory=this.chatHistory.slice(-n)),this.plugin.saveHistory()}addMessageToUI(t,e){let n=this.chatEl.createDiv();n.style.cssText="margin: 6px 0; display: flex; gap: 8px; align-items: flex-start; position: relative;";let s=n.createDiv();if(s.style.cssText=`
+      padding: 10px 14px;
+      border-radius: 12px;
+      max-width: 85%;
+      white-space: pre-wrap;
+      word-break: break-word;
+      flex: 1;
+      line-height: 1.4;
+    `,t==="user")s.style.background="var(--interactive-accent)",s.style.color="var(--text-on-accent)",s.style.marginLeft="auto",s.style.borderBottomRightRadius="4px";else{s.style.background="var(--background-secondary)",s.style.marginRight="auto",s.style.borderBottomLeftRadius="4px",n.style.paddingTop="24px";let i=n.createEl("button");i.type="button",i.textContent="\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",i.ariaLabel="\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",i.title="\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430",i.style.cssText=`
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        height: 22px;
+        padding: 0 8px;
+        background: var(--background-primary);
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.2s, background 0.2s, color 0.2s, border-color 0.2s;
+        z-index: 10;
+        margin: 0;
+        line-height: 1;
+      `,n.onmouseenter=()=>i.style.opacity="0.8",n.onmouseleave=()=>i.style.opacity="0",i.onmouseenter=()=>i.style.opacity="1",i.onmouseleave=()=>i.style.opacity="0.8",i.onclick=async o=>{o.stopPropagation();try{if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(e);else{let a=document.createElement("textarea");a.value=e,a.style.position="fixed",a.style.left="-9999px",document.body.appendChild(a),a.focus(),a.select(),document.execCommand("copy"),document.body.removeChild(a)}i.disabled=!0,i.textContent="\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D\u043E",i.style.background="var(--interactive-success)",setTimeout(()=>{i.disabled=!1,i.textContent="\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",i.style.background="var(--background-primary)"},1200)}catch(a){console.error("Copy failed:",a);let c=document.createRange();c.selectNode(s),window.getSelection()?.removeAllRanges(),window.getSelection()?.addRange(c),new m("\u0412\u044B\u0434\u0435\u043B\u0438 \u0442\u0435\u043A\u0441\u0442 \u0432\u0440\u0443\u0447\u043D\u0443\u044E \u0438\u043B\u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u044C \u043F\u0440\u0430\u0432\u0430 \u0434\u043E\u0441\u0442\u0443\u043F\u0430")}}}s.setText(e),this.chatEl.scrollTop=this.chatEl.scrollHeight}};J.exports={AIChatView:_}});var nt=h((Xt,it)=>{var{Modal:tt,Setting:Gt,ButtonComponent:b,Notice:y}=require("obsidian"),B=w(),{getAllModes:It}=T(),{processQuickAction:et}=L(),{sendToAI:St}=E(),{composePrompt:At,SYSTEM_PROMPT:st}=T(),H=class extends tt{constructor(t,e,n,s){super(t),this.plugin=e,this.text=n,this.editor=s}onOpen(){let{contentEl:t}=this;t.createEl("h2",{text:"AI Assistant"});let e=t.createEl("p");e.style.cssText="color: var(--text-muted); font-size: 12px; margin-bottom: 16px;",e.setText(`\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0430 \u0442\u0435\u043A\u0441\u0442\u0430: ${this.text.length} \u0441\u0438\u043C\u0432\u043E\u043B\u043E\u0432`);let n=It(this.plugin.settings.customPrompts),s=t.createDiv();s.style.cssText="margin-bottom: 20px;",s.createEl("h4",{text:"\u0411\u044B\u0441\u0442\u0440\u044B\u0435 \u0440\u0435\u0436\u0438\u043C\u044B:",style:"margin-bottom: 10px; color: var(--text-normal);"});let i=s.createDiv();i.style.cssText="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;",Object.values(n).forEach(d=>{let f=new b(i);f.setButtonText(d.label),f.setClass("mod-cta"),f.onClick(async()=>{this.close(),await this.processMode(d.id)})});let o=t.createEl("div");o.style.cssText=`
+      display: flex;
+      align-items: center;
+      margin: 20px 0;
+      color: var(--text-faint);
+      font-size: 12px;
+    `,o.createEl("div",{style:"flex: 1; height: 1px; background: var(--background-modifier-border);"}),o.createEl("span",{text:"\u0438\u043B\u0438 \u0441\u0432\u043E\u0439 \u043F\u0440\u043E\u043C\u043F\u0442",style:"padding: 0 10px;"}),o.createEl("div",{style:"flex: 1; height: 1px; background: var(--background-modifier-border);"});let a=t.createDiv(),c=a.createEl("label");c.style.cssText="display: block; margin-bottom: 8px; font-weight: 500; color: var(--text-normal);",c.setText("\u0418\u043B\u0438 \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0439 \u0437\u0430\u043F\u0440\u043E\u0441:");let l=a.createEl("textarea");l.placeholder="\u041D\u0430\u043F\u0440\u0438\u043C\u0435\u0440: \u041F\u0435\u0440\u0435\u0432\u0435\u0434\u0438 \u043D\u0430 \u0430\u043D\u0433\u043B\u0438\u0439\u0441\u043A\u0438\u0439, \u0432\u044B\u0434\u0435\u043B\u0438 \u043A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u0438\u0434\u0435\u0438...",l.style.cssText=`
+      width: 100%;
+      min-height: 100px;
+      padding: 10px;
+      margin-bottom: 12px;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: 6px;
+      background: var(--background-primary);
+      color: var(--text-normal);
+      font-family: var(--font-default);
+      font-size: 13px;
+      resize: vertical;
+      box-sizing: border-box;
+    `,setTimeout(()=>l.focus(),100),l.addEventListener("keydown",d=>{d.key==="Enter"&&!d.shiftKey&&(d.preventDefault(),l.value.trim()&&(this.close(),this.processCustom(l.value.trim())))});let x=a.createDiv();x.style.cssText="display: flex; gap: 8px; justify-content: flex-end;";let p=new b(x);p.setButtonText("\u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u044C"),p.setClass("mod-cta"),p.setDisabled(!0),l.addEventListener("input",()=>{let d=l.value.trim().length>0;p.setDisabled(!d)}),p.onClick(()=>{l.value.trim()&&(this.close(),this.processCustom(l.value.trim()))});let u=new b(x);u.setButtonText("\u041E\u0442\u043C\u0435\u043D\u0430"),u.setClass("mod-secondary"),u.onClick(()=>this.close())}async processMode(t){let e=this.app.workspace.getLeavesOfType(B.VIEW_TYPE_AI)[0]?.view;e&&e.constructor.name==="AIChatView"?await et({plugin:this.plugin,modeId:t,text:this.text,editor:this.editor,sourceType:this.text===this.editor.getSelection()?"selection":"full-file",insertBehavior:e.insertBehavior||"modal",onUpdateUI:(n,s)=>{n==="user"||n==="assistant"?e.addMessageToUI(n,s):n==="loading"&&e.setLoading(s)}}):(new y("\u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u043F\u0430\u043D\u0435\u043B\u044C AI Chat, \u0447\u0442\u043E\u0431\u044B \u0432\u0438\u0434\u0435\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E \u0434\u0438\u0430\u043B\u043E\u0433\u0430"),await et({plugin:this.plugin,modeId:t,text:this.text,editor:this.editor,sourceType:this.text===this.editor.getSelection()?"selection":"full-file",insertBehavior:"modal"}))}async processCustom(t){if(!t||t.trim().length===0){new y("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043F\u0440\u043E\u043C\u043F\u0442");return}let e=this.app.workspace.getLeavesOfType(B.VIEW_TYPE_AI)[0]?.view,n=e&&e.constructor.name==="AIChatView";n?(e.addMessageToUI("user",`\u0421\u0432\u043E\u0439 \u043F\u0440\u043E\u043C\u043F\u0442: ${t}
 
-${contextBlock}
+${this.text.slice(0,100)}${this.text.length>100?"...":""}`),e.setLoading(!0)):new y("\u041E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u044E \u0437\u0430\u043F\u0440\u043E\u0441...");try{let s=At({systemPrompt:st,taskInstruction:t,context:this.text}),i={model:this.plugin.settings.model,messages:[{role:"system",content:st},{role:"user",content:s}],max_tokens:this.plugin.settings.maxTokens,temperature:this.plugin.settings.temperature},o=await St({apiUrl:B.API_URL,apiKey:this.plugin.settings.apiKey,payload:i});if(o)if(n){e.addMessageToUI("assistant",o);let{InsertModeModal:a}=k();new a(this.app,o,this.text,this.editor).open()}else this.showResponseInModal(o)}catch(s){console.error("Custom mode failed:",s),new y(`\u041E\u0448\u0438\u0431\u043A\u0430: ${s.message}`),n&&e.addMessageToUI("assistant",`\u041E\u0448\u0438\u0431\u043A\u0430: ${s.message}`)}finally{n&&e.setLoading(!1)}}showResponseInModal(t){let e=new tt(this.app),n=this.editor&&this.editor.getSelection().trim().length>0;e.onOpen=()=>{let{contentEl:s}=e;s.createEl("h3",{text:n?"\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435?":"\u041E\u0442\u0432\u0435\u0442 \u0433\u043E\u0442\u043E\u0432"});let i=s.createDiv();i.style.cssText=`
+        background: var(--background-primary);
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 6px;
+        padding: 12px;
+        margin: 15px 0;
+        max-height: 200px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: var(--font-monospace);
+        font-size: 12px;
+        color: var(--text-normal);
+      `,i.setText(t);let o=s.createEl("p");o.style.cssText="color: var(--text-muted); font-size: 11px; margin-bottom: 15px;",o.setText(n?"\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u0431\u0443\u0434\u0435\u0442 \u0437\u0430\u043C\u0435\u043D\u0451\u043D \u043D\u0430 \u044D\u0442\u043E\u0442 \u043E\u0442\u0432\u0435\u0442.":"\u0422\u0435\u043A\u0441\u0442 \u0431\u0443\u0434\u0435\u0442 \u0432\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u043F\u043E\u0441\u043B\u0435 \u043A\u0443\u0440\u0441\u043E\u0440\u0430.");let a=s.createDiv();if(a.style.cssText="display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px;",new b(a).setButtonText("\u041A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C").onClick(async()=>{try{await navigator.clipboard.writeText(t),new y("\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430")}catch{new y("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430")}}),this.editor){let c=new b(a);n?c.setButtonText("\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435").setClass("mod-cta").onClick(()=>{this.editor.replaceSelection(t),e.close(),new y("\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435 \u0437\u0430\u043C\u0435\u043D\u0435\u043D\u043E")}):c.setButtonText("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0441\u043B\u0435").setClass("mod-cta").onClick(()=>{let l=this.editor.getCursor();this.editor.setSelection(l,l),this.editor.replaceSelection(`
 
-\u041E\u0442\u0432\u0435\u0442:`;
-    return {
-      model: this.plugin.settings.model,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...this.chatHistory,
-        { role: "user", content: finalPrompt }
-      ],
-      max_tokens: this.plugin.settings.maxTokens,
-      temperature: this.plugin.settings.temperature
-    };
-  }
-  getTaskInstruction(mode, userInput) {
-    const instructions = {
-      fix: "\u0418\u0441\u043F\u0440\u0430\u0432\u044C \u0433\u0440\u0430\u043C\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0435, \u0441\u0442\u0438\u043B\u0438\u0441\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u0438 \u043B\u043E\u0433\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u0432 \u0442\u0435\u043A\u0441\u0442\u0435 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>.",
-      summary: "\u0421\u0434\u0435\u043B\u0430\u0439 \u043A\u0440\u0430\u0442\u043A\u043E\u0435 \u0441\u0430\u043C\u043C\u0430\u0440\u0438 \u0442\u0435\u043A\u0441\u0442\u0430 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>. \u0412\u044B\u0434\u0435\u043B\u0438 \u043A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u0442\u0435\u0437\u0438\u0441\u044B.",
-      explain: "\u041E\u0431\u044A\u044F\u0441\u043D\u0438 \u043F\u0440\u043E\u0441\u0442\u044B\u043C\u0438 \u0441\u043B\u043E\u0432\u0430\u043C\u0438 \u0441\u0443\u0442\u044C \u0442\u0435\u043A\u0441\u0442\u0430 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>.",
-      rewrite: "\u041F\u0435\u0440\u0435\u043F\u0438\u0448\u0438 \u0442\u0435\u043A\u0441\u0442 \u0438\u0437 \u0431\u043B\u043E\u043A\u0430 <context>, \u0443\u043B\u0443\u0447\u0448\u0438\u0432 \u0447\u0438\u0442\u0430\u0435\u043C\u043E\u0441\u0442\u044C.",
-      normal: userInput
-    };
-    return instructions[mode] || instructions.normal;
-  }
-  async sendToAI(payload) {
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.plugin.settings.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `HTTP ${response.status}`);
-    }
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim();
-  }
-  updateHistory(userInput, assistantResponse) {
-    this.chatHistory.push(
-      { role: "user", content: userInput },
-      { role: "assistant", content: assistantResponse }
-    );
-    const MAX_HISTORY_LENGTH = 10;
-    if (this.chatHistory.length > MAX_HISTORY_LENGTH) {
-      this.chatHistory = this.chatHistory.slice(-MAX_HISTORY_LENGTH);
-    }
-  }
-  addMessageToUI(role, text) {
-    const msgEl = this.chatEl.createDiv();
-    msgEl.style.margin = "6px 0";
-    msgEl.style.padding = "10px 14px";
-    msgEl.style.borderRadius = "12px";
-    msgEl.style.maxWidth = "85%";
-    msgEl.style.whiteSpace = "pre-wrap";
-    msgEl.style.wordBreak = "break-word";
-    if (role === "user") {
-      msgEl.style.background = "var(--interactive-accent)";
-      msgEl.style.color = "var(--text-on-accent)";
-      msgEl.style.marginLeft = "auto";
-      msgEl.style.borderBottomRightRadius = "4px";
-    } else {
-      msgEl.style.background = "var(--background-secondary)";
-      msgEl.style.marginRight = "auto";
-      msgEl.style.borderBottomLeftRadius = "4px";
-    }
-    msgEl.setText(text);
-    this.chatEl.scrollTop = this.chatEl.scrollHeight;
-  }
-};
-var QuickModeModal = class extends Modal {
-  constructor(app, plugin, text, editor) {
-    super(app);
-    this.plugin = plugin;
-    this.text = text;
-    this.editor = editor;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "\u{1F916} AI Assistant" });
-    const modes = Object.values(QUICK_MODES);
-    modes.forEach((mode) => {
-      const btnWrapper = contentEl.createDiv();
-      btnWrapper.style.margin = "8px 0";
-      const btn = new ButtonComponent(btnWrapper);
-      btn.setButtonText(mode.label);
-      btn.setClass("mod-cta");
-      btn.onClick(async () => {
-        this.close();
-        await this.processMode(mode.id);
-      });
-    });
-    new Setting(contentEl).setName("\u2500\u2500\u2500\u2500\u2500\u2500").setDesc("\u0418\u043B\u0438 \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0439 \u0437\u0430\u043F\u0440\u043E\u0441");
-    const customInput = contentEl.createEl("textarea");
-    customInput.placeholder = "\u041D\u0430\u043F\u0438\u0448\u0438 \u0441\u0432\u043E\u0439 \u043F\u0440\u043E\u043C\u043F\u0442...";
-    customInput.style.width = "100%";
-    customInput.style.minHeight = "80px";
-    customInput.style.marginBottom = "10px";
-    new ButtonComponent(contentEl).setButtonText("\u{1F680} \u0412\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u044C").setClass("mod-cta").onClick(async () => {
-      if (customInput.value.trim()) {
-        this.close();
-        await this.processCustom(customInput.value.trim());
-      }
-    });
-    new ButtonComponent(contentEl).setButtonText("\u041E\u0442\u043C\u0435\u043D\u0430").onClick(() => this.close());
-  }
-  async processMode(modeId) {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_AI)[0]?.view;
-    if (view && view instanceof AIChatView) {
-      await view.quickProcess(modeId, this.text, this.editor);
-    }
-  }
-  async processCustom(prompt) {
-    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_AI)[0]?.view;
-    if (view && view instanceof AIChatView) {
-      view.addMessageToUI("user", `${prompt}
-
-${this.text.slice(0, 200)}${this.text.length > 200 ? "..." : ""}`);
-      view.setLoading(true);
-      try {
-        const fullPrompt = `${prompt}:
-
-${this.text}`;
-        const payload = {
-          model: this.plugin.settings.model,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: fullPrompt }
-          ],
-          max_tokens: this.plugin.settings.maxTokens,
-          temperature: this.plugin.settings.temperature
-        };
-        const response = await view.sendToAI(payload);
-        if (response) {
-          view.addMessageToUI("assistant", response);
-          new InsertModeModal(this.app, response, this.text, this.editor).open();
-        }
-      } catch (error) {
-        console.error("Custom mode failed:", error);
-        new Notice("\u041E\u0448\u0438\u0431\u043A\u0430: " + error.message);
-      } finally {
-        view.setLoading(false);
-      }
-    }
-  }
-};
-var InsertModeModal = class extends Modal {
-  constructor(app, response, originalText, editor) {
-    super(app);
-    this.response = response;
-    this.originalText = originalText;
-    this.editor = editor;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h3", { text: "\u{1F4E5} \u041A\u0430\u043A \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442?" });
-    const description = contentEl.createEl("p");
-    description.style.color = "var(--text-muted)";
-    description.style.marginBottom = "15px";
-    description.setText("\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043F\u043E\u0441\u043E\u0431 \u0432\u0441\u0442\u0430\u0432\u043A\u0438 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u043D\u043D\u043E\u0433\u043E \u0442\u0435\u043A\u0441\u0442\u0430");
-    const buttonsContainer = contentEl.createDiv();
-    buttonsContainer.style.display = "flex";
-    buttonsContainer.style.flexDirection = "column";
-    buttonsContainer.style.gap = "10px";
-    const modes = [
-      {
-        id: "replace",
-        label: "\u{1F4CB} \u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u0435",
-        desc: "\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u043D\u0430 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442"
-      },
-      {
-        id: "append",
-        label: "\u2795 \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0441\u043B\u0435",
-        desc: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u043F\u043E\u0441\u043B\u0435 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0433\u043E \u0442\u0435\u043A\u0441\u0442\u0430"
-      },
-      {
-        id: "block",
-        label: "\u{1F4E6} \u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0431\u043B\u043E\u043A\u043E\u043C",
-        desc: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0441 \u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043A\u043E\u043C '\u{1F916} AI'"
-      }
-    ];
-    modes.forEach(({ id, label, desc }) => {
-      const btnWrapper = buttonsContainer.createDiv();
-      btnWrapper.style.display = "flex";
-      btnWrapper.style.flexDirection = "column";
-      btnWrapper.style.gap = "4px";
-      const btn = new ButtonComponent(btnWrapper);
-      btn.setButtonText(label);
-      btn.setClass("mod-cta");
-      btn.onClick(() => {
-        this.insertWithMode(id);
-        this.close();
-      });
-      const descEl = btnWrapper.createEl("small");
-      descEl.style.color = "var(--text-muted)";
-      descEl.style.fontSize = "11px";
-      descEl.setText(desc);
-    });
-    new ButtonComponent(contentEl).setButtonText("\u041E\u0442\u043C\u0435\u043D\u0430").onClick(() => this.close());
-  }
-  insertWithMode(mode) {
-    if (!this.editor) {
-      new Notice("\u26A0\uFE0F \u041D\u0435\u0442 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0430");
-      return;
-    }
-    let insertText = "";
-    switch (mode) {
-      case "replace":
-        this.editor.replaceSelection(this.response);
-        break;
-      case "append":
-        insertText = "\n\n---\n" + this.response;
-        this.editor.replaceSelection(insertText);
-        break;
-      case "block":
-        insertText = "\n\n---\n### \u{1F916} AI\n" + this.response;
-        this.editor.replaceSelection(insertText);
-        break;
-    }
-    new Notice("\u0422\u0435\u043A\u0441\u0442 \u0432\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u2713");
-  }
-};
-var AIAssistantSettingTab = class extends PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    containerEl.createEl("h2", { text: "AI Assistant Settings" });
-    new Setting(containerEl).setName("API Key").setDesc("Hugging Face API token (hf_...)").addText((text) => text.setPlaceholder("hf_...").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
-      this.plugin.settings.apiKey = value;
-      await this.plugin.saveSettings();
-    }));
-    new Setting(containerEl).setName("Model").setDesc("Model identifier from Hugging Face").addText((text) => text.setValue(this.plugin.settings.model).onChange(async (value) => {
-      this.plugin.settings.model = value;
-      await this.plugin.saveSettings();
-    }));
-    new Setting(containerEl).setName("Max Tokens").setDesc("Maximum response length").addSlider((slider) => slider.setLimits(256, 4096, 256).setValue(this.plugin.settings.maxTokens).setDynamicTooltip().onChange(async (value) => {
-      this.plugin.settings.maxTokens = value;
-      await this.plugin.saveSettings();
-    }));
-    new Setting(containerEl).setName("Temperature").setDesc("Creativity level (0.0 - \u0442\u043E\u0447\u043D\u044B\u0439, 1.0 - \u043A\u0440\u0435\u0430\u0442\u0438\u0432\u043D\u044B\u0439)").addSlider((slider) => slider.setLimits(0, 1, 0.1).setValue(this.plugin.settings.temperature).setDynamicTooltip().onChange(async (value) => {
-      this.plugin.settings.temperature = value;
-      await this.plugin.saveSettings();
-    }));
-    new Setting(containerEl).setName("Context Limit").setDesc("Max characters to send from editor").addSlider((slider) => slider.setLimits(1e3, 8e3, 500).setValue(this.plugin.settings.contextLimit).setDynamicTooltip().onChange(async (value) => {
-      this.plugin.settings.contextLimit = value;
-      await this.plugin.saveSettings();
-    }));
-  }
-};
+---
+`+t),e.close(),new y("\u0422\u0435\u043A\u0441\u0442 \u0432\u0441\u0442\u0430\u0432\u043B\u0435\u043D")})}new b(a).setButtonText("\u041E\u0442\u043C\u0435\u043D\u0430").setClass("mod-secondary").onClick(()=>e.close())},e.open()}onClose(){let{contentEl:t}=this;t.empty()}};it.exports={QuickModeModal:H}});var{Plugin:Mt,Notice:Lt}=require("obsidian"),v=w(),{DEFAULT_SETTINGS:Pt}=C(),{AIAssistantSettingTab:Dt}=R(),{AIChatView:_t}=Z(),{QuickModeModal:Bt}=nt(),{getActiveEditor:Ht}=P();module.exports=class extends Mt{async onload(){await this.loadSettings(),this.chatHistory=this.settings.chatHistory||[],this.registerView(v.VIEW_TYPE_AI,t=>new _t(t,this)),this.addCommand({id:v.COMMANDS.OPEN_CHAT,name:"AI: Open Chat",callback:()=>this.activateView()}),this.addCommand({id:v.COMMANDS.QUICK_MENU,name:"AI: Quick Menu",editorCallback:(t,e)=>{let n=t.getSelection()||t.getValue();new Bt(this.app,this,n,t).open()}}),this.addSettingTab(new Dt(this.app,this)),new Lt("AI Chat \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043D")}onunload(){this.settings.chatHistory=this.chatHistory,this.saveSettings(),this.app.workspace.detachLeavesOfType(v.VIEW_TYPE_AI)}async activateView(){let{workspace:t}=this.app,e=t.getLeavesOfType(v.VIEW_TYPE_AI)[0];e||(e=t.getRightLeaf(!1),await e.setViewState({type:v.VIEW_TYPE_AI,active:!0})),t.revealLeaf(e)}async loadSettings(){this.settings=Object.assign({},Pt,await this.loadData())}async saveSettings(){await this.saveData(this.settings)}async saveHistory(){let t=this.settings.maxHistoryLength||20;t>0&&this.chatHistory.length>t&&(this.chatHistory=this.chatHistory.slice(-t)),this.settings.chatHistory=this.chatHistory,await this.saveSettings()}getActiveEditor(){return Ht(this.app)}};
