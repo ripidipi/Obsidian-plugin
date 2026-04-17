@@ -22,7 +22,7 @@
 
 ```bash
 # Клонируй репозиторий
-git clone <repository-url> Obsidian-plugin
+git clone https://github.com/ripidipi/Obsidian-plugin.git
 cd Obsidian-plugin
 
 # Установи зависимости
@@ -40,6 +40,7 @@ npm run dev
    - main.js (создаётся после сборки)
    - manifest.json (файл описания плагина)
    - prompts.json (конфиг с промптами)
+   А лучше и удобнее для модернизации скопировать туда сразу весь клонированный проект
 4. В Obsidian: Настройки → Сторонние плагины → отключи "Безопасный режим" → найди AI Assist → включи
 
 ### Настройка
