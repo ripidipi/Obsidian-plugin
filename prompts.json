@@ -1,0 +1,19 @@
+{
+  "version": "1.0-student-edition",
+  "description": "Конфиг промптов. ВАШЕ ЗАДАНИЕ: улучшить инструкции, чтобы модель работала лучше",
+  
+  "system_prompt": "Ты AI",
+
+  "quick_modes": [
+    {
+      "id": "summary",
+      "label": "Конспект",
+      "instruction": "Коротко!"
+    },
+    {
+      "id": "review",
+      "label": "Оценить",
+      "instruction": "Оцени!"
+    }
+  ]
+}

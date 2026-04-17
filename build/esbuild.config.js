@@ -46,7 +46,7 @@ const config = {
 // Иначе — просто собираем один раз
 if (isDev) {
   esbuild.context(config).then(ctx => {
-    console.log('Запущен режим разработки: слежу за изменениями...');
+    console.log('Запущен режим разработки: активированно отслеживание изменений');
     ctx.watch();
   }).catch(() => process.exit(1));
 } else {

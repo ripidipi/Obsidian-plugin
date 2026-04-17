@@ -1,71 +1,83 @@
-// Логика формирования промптов для AI
-// Здесь живёт "мозг" плагина: как превратить действие пользователя в запрос к модели
-// Вынесено отдельно, чтобы легко тестировать и менять стратегию промптинга
+// Логика промптов (инструкций) для модели.
+//
+// Зачем отдельный модуль:
+// 1) Спрятать "склейку" промпта в одном месте (читаемость и тестируемость).
+// 2) Развести ответственность: UI показывает кнопки, а здесь решается "что отправлять в модель".
+//
+// Где живут сами тексты режимов:
+// - `prompts.json` в корне проекта: системный промпт и базовые быстрые кнопки.
+// - настройки плагина (customPrompts): пользователь может добавить свои режимы в UI.
+//
+// Правило приоритета:
+// - сначала берём режимы из `prompts.json`;
+// - затем добавляем/переопределяем режимы из настроек (customPrompts).
 
-// ===== Быстрые режимы: предопределённые действия =====
-// Каждый режим — это кнопка в интерфейсе с готовым промптом
-// id: уникальный ключ, label: текст на кнопке, instruction: что сказать модели
-const QUICK_MODES = {
-  FIX: { 
-    id: 'fix', 
-    label: 'Исправить', 
-    instruction: 'Исправь орфографию, пунктуацию и грамматику. НЕ меняй смысл и стиль автора' 
-  },
-  REPHRASE: { 
-    id: 'rephrase', 
-    label: 'Улучшить', 
-    instruction: 'Перепиши текст: сделай его яснее, логичнее и читабельнее. Сохрани ключевые идеи' 
-  },
-  SUMMARY: { 
-    id: 'summary', 
-    label: 'Конспект', 
-    instruction: 'Сделай краткий конспект: выдели основные тезисы, убери воду. Формат: маркированный список' 
-  },
-  EXPLAIN: { 
-    id: 'explain', 
-    label: 'Объяснить', 
-    instruction: 'Объясни суть текста простыми словами, как если бы рассказывал новичку. Избегай жаргона' 
-  },
-  REVIEW: { 
-    id: 'review', 
-    label: 'Оценить', 
-    instruction: 'Оцени текст по критериям: ясность, логика, структура, грамотность. Дай конкретные рекомендации по улучшению' 
-  },
-  SMART: { 
-    id: 'smart', 
-    label: 'Умный', 
-    instruction: 'Проанализируй текст и предложи улучшения: что добавить, что убрать, как перестроить аргументацию' 
+const promptsConfig = require('../../prompts.json');
+
+// ===== Быстрые режимы (из prompts.json) =====
+// Структура `prompts.json`:
+// {
+//   "system_prompt": "общая инструкция модели",
+//   "quick_modes": [
+//     { "id": "fix", "label": "Исправить", "instruction": "..." }
+//   ]
+// }
+//
+// Для студентов: обычно достаточно редактировать только `prompts.json`.
+
+const QUICK_MODES = (() => {
+  try {
+    const modes = {};
+    
+    if (Array.isArray(promptsConfig.quick_modes)) {
+      for (const mode of promptsConfig.quick_modes) {
+        // Валидация: все три поля обязательны.
+        if (mode?.id && mode?.label && mode?.instruction) {
+          // Храним ключ в верхнем регистре: FIX, SUMMARY, EXPLAIN.
+          const key = mode.id.toUpperCase();
+          modes[key] = {
+            id: mode.id,
+            label: mode.label,
+            instruction: mode.instruction
+          };
+        } else {
+          console.warn('Режим пропущен: проверьте поля id/label/instruction', mode);
+        }
+      }
+    }
+    return modes;
+  } catch (error) {
+    console.error('Не удалось загрузить prompts.json:', error.message);
+    return {};
   }
-};
+})();
 
-// Системный промпт: "инструкция по поведению" для модели
-// Задаёт тон, язык и ограничения для всех ответов
-const SYSTEM_PROMPT = `Ты AI-помощник в редакторе Obsidian.
-Отвечай по делу, на русском языке.
-Если предоставлен контекст — обязательно используй его для ответа.
-Не выдумывай факты, не добавляй информацию, которой нет в контексте если об этом не просят
-Если просят что-то сделать без отговорок просто делай`;
+// ===== Системный промпт =====
+// Базовая инструкция (role/system message), одинаковая для всех режимов.
+const SYSTEM_PROMPT = promptsConfig.system_prompt || [
+  'Ты AI-помощник в редакторе Obsidian.',
+  'Отвечай по делу и на русском языке.',
+  'Если информации недостаточно, задай уточняющие вопросы.'
+].join('\n');
 
 /**
- * Собирает финальный промпт для отправки в модель
- * Использует шаблон с разделителями <instructions>, <task>, <context>
- * Это помогает модели чётко понимать, что от неё требуется
+ * Собирает текст пользовательского сообщения для отправки в модель.
+ * Здесь мы кладём данные в "явные" блоки, чтобы модели было проще разделять:
+ * - общие правила,
+ * - конкретную задачу,
+ * - контекст (текст из редактора).
  * 
  * @param {Object} options
- * @param {string} options.systemPrompt - Базовая инструкция для модели
- * @param {string} options.taskInstruction - Конкретная задача (из режима или ввода пользователя)
- * @param {string|null} options.context - Текст из редактора (выделение или вся заметка)
- * @param {Array} options.history - История сообщений для поддержания контекста диалога
- * @returns {string} - Готовый промпт для отправки
+ * @param {string} options.systemPrompt - Базовая инструкция
+ * @param {string} options.taskInstruction - Задача из режима или ввода пользователя
+ * @param {string|null} options.context - Текст из редактора
+ * @returns {string} - Готовый промпт
  */
-function composePrompt({ systemPrompt, taskInstruction, context, history = [] }) {
-  // Формируем блок контекста: если есть — оборачиваем в теги, если нет — пишем заглушку
+function composePrompt({ systemPrompt, taskInstruction, context }) {
   const contextBlock = context 
     ? `<context>\n${context}\n</context>` 
     : '<context>Контекст не предоставлен.</context>';
 
-  // Собираем промпт по шаблону
-  // Разделители помогают модели не перепутать инструкции с данными
   return `
 <instructions>
 ${systemPrompt}
@@ -81,48 +93,44 @@ ${contextBlock}
 }
 
 /**
- * Возвращает текстовую инструкцию для модели в зависимости от режима
- * Если режим неизвестен — возвращает ввод пользователя как есть
+ * Возвращает инструкцию для режима.
+ * Если режим неизвестен, используем `userInput` как инструкцию (обычный чат).
  * 
  * @param {string} mode - Идентификатор режима ('fix', 'summary' и т.д.)
- * @param {string} userInput - Текст, введённый пользователем (для режима 'normal')
- * @returns {string} - Инструкция для вставки в промпт
+ * @param {string} userInput - Текст пользователя (для обычного чата)
+ * @returns {string} - Инструкция для промпта
  */
 function getTaskInstruction(mode, userInput) {
-  // Словарь: режим → инструкция
-  const instructions = {
-    fix: 'Исправь грамматические, стилистические и логические ошибки в тексте из блока <context>.',
-    summary: 'Сделай краткое саммари текста из блока <context>. Выдели ключевые тезисы, оформи списком.',
-    explain: 'Объясни простыми словами суть текста из блока <context>. Избегай сложных терминов.',
-    rewrite: 'Перепиши текст из блока <context>, улучшив читаемость и структуру. Сохрани смысл.',
-    normal: userInput // Для обычного чата — используем ввод пользователя как задачу
-  };
+  // Ищем режим в QUICK_MODES (ключ в верхнем регистре).
+  const modeObj = QUICK_MODES[mode.toUpperCase()];
   
-  // Возвращаем инструкцию для режима или дефолтное значение
-  return instructions[mode] || instructions.normal;
+  // Если нашли — берём instruction, иначе — userInput (обычный чат).
+  return modeObj?.instruction || userInput;
 }
 
 /**
- * Объединяет встроенные режимы с пользовательскими из настроек
- * Позволяет расширять функционал без изменения кода
+ * Возвращает все доступные режимы (из prompts.json + пользовательские из настроек).
+ * Пользовательские режимы могут перезаписывать базовые, если совпал id.
  * 
- * @param {Array} customPrompts - Массив пользовательских режимов из настроек
- * @returns {Object} - Объект режимов: ключ → {id, label, instruction}
+ * @param {Array} customPrompts - Режимы из настроек плагина (опционально)
+ * @returns {Object} - Объект режимов
  */
 function getAllModes(customPrompts = []) {
-  // Начинаем со встроенных режимов
+  // Начинаем с режимов из JSON.
   const allModes = { ...QUICK_MODES };
   
-  // Добавляем пользовательские, проверяя уникальность id
-  for (const prompt of customPrompts) {
-    if (prompt?.id && prompt?.label && prompt?.instruction) {
-      // Приводим id к верхнему регистру для согласованности с QUICK_MODES
-      const key = prompt.id.toUpperCase();
-      allModes[key] = {
-        id: prompt.id,
-        label: prompt.label,
-        instruction: prompt.instruction
-      };
+  // Добавляем пользовательские (из UI настроек), если есть.
+  if (Array.isArray(customPrompts)) {
+    for (const prompt of customPrompts) {
+      if (prompt?.id && prompt?.label && prompt?.instruction) {
+        const key = prompt.id.toUpperCase();
+        // Пользовательский режим может перезаписать стандартный.
+        allModes[key] = {
+          id: prompt.id,
+          label: prompt.label,
+          instruction: prompt.instruction
+        };
+      }
     }
   }
   
@@ -134,5 +142,6 @@ module.exports = {
   SYSTEM_PROMPT,
   composePrompt,
   getTaskInstruction,
-  getAllModes
+  getAllModes,
+  config: promptsConfig // Экспортируем конфиг для диагностики
 };
